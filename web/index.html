@@ -1,47 +1,91 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-<!-- thanks: https://github.com/StudyLeaks/heartbeat/ -->
 
 <head>
     <meta charset="UTF-8" />
-    <title>Heart Beat StudyLeaks</title>
+    <title>MiBand Heart Rate</title>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Young+Serif&display=swap');
 
         :root {
-            --heart-speed: 1s
+            --heart-speed: 1s;
+            --glow-color: #f20044;
         }
 
-        body {
+        * {
             margin: 0;
             padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            border: none !important;
+            outline: none !important;
+            box-shadow: none !important;
+            width: 100%;
+            height: 100%;
             min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
+            background: transparent !important;
+            font-family: 'Young Serif', serif;
+            user-select: none;
+            overflow: hidden;
+        }
+
+        /* 移除所有可能的边框 */
+        * {
+            border: none !important;
+            outline: none !important;
+            -webkit-outline: none !important;
+        }
+
+        /* 针对 Tauri WebView 的特殊处理 */
+        body::before,
+        body::after,
+        html::before,
+        html::after {
+            content: none !important;
+            display: none !important;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            padding: 16px;
+            position: relative;
             background: transparent;
+            overflow: hidden;
+        }
+
+        /* 心率主显示 */
+        .heart-rate-main {
+            display: flex;
+            align-items: center;
+            gap: 12px;
         }
 
         .heart {
             height: 30px;
             width: 30px;
-            background: #f20044;
+            background: var(--glow-color);
             position: relative;
             transform: rotate(-45deg) translate(-4px, 4px);
-            box-shadow: -10px 10px 90px #f20044;
+            box-shadow: -10px 10px 90px var(--glow-color);
             animation: heart var(--heart-speed) linear infinite;
-            margin: 20px;
         }
 
         #heart-rate-number {
             font-size: 50px;
-            font-family: 'Young Serif', serif;
-            vertical-align: text-top;
-
             color: #ffffff;
             text-shadow:
-                #f20044 0px 0px 20px,
-                #f20044 0px 0px 40px,
+                var(--glow-color) 0px 0px 20px,
+                var(--glow-color) 0px 0px 40px,
                 #fff 0px 0px 50px,
                 #fff 0px 0px 60px;
         }
@@ -50,11 +94,9 @@
             0% {
                 transform: rotate(-45deg) scale(1.07) translate(-4px, 4px);
             }
-
             80% {
                 transform: rotate(-45deg) scale(1) translate(-4px, 4px);
             }
-
             100% {
                 transform: rotate(-45deg) scale(0.9) translate(-4px, 4px);
             }
@@ -65,10 +107,10 @@
             position: absolute;
             height: 30px;
             width: 30px;
-            background: #f20044;
+            background: var(--glow-color);
             top: -50%;
             border-radius: 40px;
-            box-shadow: -5px -5px 50px #f20044;
+            box-shadow: -5px -5px 50px var(--glow-color);
         }
 
         .heart::after {
@@ -76,42 +118,533 @@
             position: absolute;
             height: 30px;
             width: 30px;
-            background: #f20044;
+            background: var(--glow-color);
             right: -50%;
             border-radius: 40px;
-            box-shadow: 5px 5px 50px #f20044;
+            box-shadow: 5px 5px 50px var(--glow-color);
+        }
+
+        /* 统计信息 */
+        .stats {
+            display: flex;
+            gap: 16px;
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.9);
+            text-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+        }
+
+        .stat-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .stat-icon {
+            width: 14px;
+            height: 14px;
+            opacity: 0.8;
+        }
+
+        .stat-value {
+            font-weight: bold;
+        }
+
+        /* 控制按钮 */
+        .controls {
+            display: flex;
+            gap: 8px;
+            transition: opacity 0.3s;
+        }
+
+        /* 穿透模式下，鼠标悬停才显示按钮 */
+        .controls.click-through-mode {
+            opacity: 0;
+        }
+
+        .controls.click-through-mode:hover {
+            opacity: 1;
+        }
+
+        .control-btn {
+            background: rgba(255, 255, 255, 0.15);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 6px;
+            padding: 6px 10px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            color: white;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+
+        .control-btn:hover {
+            background: rgba(255, 255, 255, 0.25);
+        }
+
+        .control-btn.active {
+            background: rgba(242, 0, 68, 0.4);
+            border-color: var(--glow-color);
+        }
+
+        .control-btn svg {
+            width: 14px;
+            height: 14px;
+        }
+
+        /* 设置面板 - 居中浮层 */
+        .settings-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 99;
+            cursor: default;
+        }
+
+        .settings-overlay.show {
+            display: block;
+        }
+
+        .settings-panel {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 100;
+            background: rgba(20, 20, 30, 0.95);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 10px;
+            padding: 16px;
+            min-width: 220px;
+            backdrop-filter: blur(20px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+        }
+
+        .settings-panel.show {
+            display: block;
+        }
+
+        .settings-title {
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.7);
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .settings-close {
+            cursor: pointer;
+            opacity: 0.6;
+            transition: opacity 0.2s;
+        }
+
+        .settings-close:hover {
+            opacity: 1;
+        }
+
+        .settings-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+
+        .settings-label {
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .settings-input {
+            width: 60px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 4px;
+            padding: 4px 8px;
+            color: white;
+            font-size: 13px;
+            text-align: center;
+        }
+
+        .settings-input:focus {
+            outline: none;
+            border-color: var(--glow-color);
+        }
+
+        /* 拖动区域 */
+        [data-tauri-drag-region] {
+            cursor: move;
+        }
+
+        /* 心形状态指示 */
+        .heart.no-contact {
+            background: #ff8800;
+            box-shadow: -10px 10px 90px #ff8800;
+        }
+        .heart.no-contact::before {
+            background: #ff8800;
+            box-shadow: -5px -5px 50px #ff8800;
+        }
+        .heart.no-contact::after {
+            background: #ff8800;
+            box-shadow: 5px 5px 50px #ff8800;
+        }
+
+        .heart.disconnected {
+            background: #555;
+            box-shadow: none;
+            animation: none;
+        }
+        .heart.disconnected::before,
+        .heart.disconnected::after {
+            background: #555;
+            box-shadow: none;
         }
     </style>
     <script>
+        // Lucide Icons (内联 SVG)
+        const icons = {
+            arrowUp: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>',
+            activity: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></svg>',
+            pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" x2="12" y1="17" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg>',
+            pinOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="2" x2="22" y1="2" y2="22"/><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h12"/></svg>',
+            settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>',
+            monitor: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>'
+        };
+
+        // 状态管理
+        const state = {
+            heartRate: 0,
+            history: [],
+            maxHistorySeconds: 60,
+            isPinned: false,
+            isClickThrough: false,
+            isSettingsOpen: false,
+            isObsRunning: false,
+            lastUpdate: 0
+        };
+
+        // 设置心率
         function setHeartRate(heartRate) {
-            document.documentElement.style.setProperty('--heart-speed', (60 / heartRate) + 's')
-            document.getElementById('heart-rate-number').innerText = heartRate
+            state.heartRate = heartRate;
+            document.documentElement.style.setProperty('--heart-speed', (60 / heartRate) + 's');
+            document.getElementById('heart-rate-number').innerText = heartRate;
+
+            // 记录历史
+            const now = Date.now();
+            state.history.push({ value: heartRate, time: now });
+
+            // 清理过期数据
+            const cutoff = now - (state.maxHistorySeconds * 1000);
+            state.history = state.history.filter(h => h.time > cutoff);
+
+            // 更新统计
+            updateStats();
         }
 
-        async function updateHeartRate() {
+        // 更新统计显示
+        function updateStats() {
+            if (state.history.length === 0) return;
+
+            const values = state.history.map(h => h.value);
+            const max = Math.max(...values);
+            const avg = Math.round(values.reduce((a, b) => a + b, 0) / values.length);
+
+            document.getElementById('stat-max').innerText = max;
+            document.getElementById('stat-avg').innerText = avg;
+        }
+
+        // 切换固定（合并锁定位置 + 鼠标穿透）
+        async function togglePin(notify = true) {
+            state.isPinned = !state.isPinned;
+            const btn = document.getElementById('btn-pin');
+            btn.classList.toggle('active', state.isPinned);
+            btn.innerHTML = state.isPinned ? icons.pin : icons.pinOff;
+            btn.title = state.isPinned ? '已固定 · 鼠标穿透中' : '未固定';
+
+            await setClickThrough(state.isPinned);
+
+            if (notify && window.__TAURI__) {
+                await window.__TAURI__.core.invoke('notify_pin_state', { pinned: state.isPinned });
+            }
+        }
+
+        // 设置鼠标穿透状态（实际调用 Tauri API）
+        async function setClickThrough(ignore) {
+            state.isClickThrough = ignore;
+
+            // 控制按钮区域的显示模式
+            const controls = document.getElementById('interactive-area');
+            controls.classList.toggle('click-through-mode', ignore);
+
+            try {
+                if (window.__TAURI__) {
+                    await window.__TAURI__.core.invoke('toggle_click_through', { ignore });
+                }
+            } catch (e) {
+                console.error('Failed to toggle click through:', e);
+            }
+        }
+
+        // 切换 OBS 服务器
+        async function toggleObs() {
+            try {
+                if (window.__TAURI__) {
+                    const portInput = document.getElementById('obs-port');
+                    const port = portInput ? Number(portInput.value) : 3030;
+                    const running = await window.__TAURI__.core.invoke('toggle_web_server', { port });
+                    state.isObsRunning = running;
+                    localStorage.setItem('obsRunning', running);
+                    updateObsButton();
+                }
+            } catch (e) {
+                console.error('Failed to toggle OBS server:', e);
+            }
+        }
+
+        // 更新 OBS 按钮状态
+        function updateObsButton() {
+            const btn = document.getElementById('btn-obs');
+            if (btn) {
+                btn.classList.toggle('active', state.isObsRunning);
+                btn.title = state.isObsRunning ? 'OBS Server: Running' : 'OBS Server: Stopped';
+            }
+        }
+
+        // 切换设置面板
+        async function toggleSettings(notify = true) {
+            state.isSettingsOpen = !state.isSettingsOpen;
+            document.getElementById('settings-panel').classList.toggle('show', state.isSettingsOpen);
+            document.getElementById('settings-overlay').classList.toggle('show', state.isSettingsOpen);
+
+            if (notify && window.__TAURI__) {
+                await window.__TAURI__.core.invoke('notify_settings_toggled', { open: state.isSettingsOpen });
+            }
+        }
+
+        async function closeSettings() {
+            state.isSettingsOpen = false;
+            document.getElementById('settings-panel').classList.remove('show');
+            document.getElementById('settings-overlay').classList.remove('show');
+            if (window.__TAURI__) {
+                await window.__TAURI__.core.invoke('notify_settings_toggled', { open: false });
+            }
+        }
+
+        // 更新统计周期
+        function updatePeriod(seconds) {
+            state.maxHistorySeconds = seconds;
+            localStorage.setItem('maxHistorySeconds', seconds);
+            const cutoff = Date.now() - (seconds * 1000);
+            state.history = state.history.filter(h => h.time > cutoff);
+            updateStats();
+        }
+
+        // 设置拖动功能
+        function setupDrag() {
+            const dragArea = document.getElementById('drag-area');
+
+            dragArea.addEventListener('mousedown', async () => {
+                if (window.__TAURI__) {
+                    await window.__TAURI__.core.invoke('start_dragging');
+                }
+            });
+        }
+
+        // 处理按钮点击
+        function handleBtnClick(event, action) {
+            event.stopPropagation();
+            event.preventDefault();
+            console.log('btn click:', action);
+
+            switch(action) {
+                case 'pin':
+                    togglePin();
+                    break;
+                case 'obs':
+                    toggleObs();
+                    break;
+                case 'settings':
+                    toggleSettings();
+                    break;
+            }
+        }
+
+        // 初始化
+        async function init() {
+            // 设置图标
+            document.getElementById('icon-max').innerHTML = icons.arrowUp;
+            document.getElementById('icon-avg').innerHTML = icons.activity;
+            document.getElementById('btn-pin').innerHTML = icons.pinOff;
+            document.getElementById('btn-settings').innerHTML = icons.settings;
+            document.getElementById('btn-obs').innerHTML = icons.monitor;
+            document.getElementById('icon-close').innerHTML = '&times;';
+
+            // 阻止按钮区域的 mousedown 冒泡到拖拽区
+            document.getElementById('interactive-area').addEventListener('mousedown', (e) => {
+                e.stopPropagation();
+            });
+
+            // 设置整个窗口可拖动
+            setupDrag();
+
+            // 恢复持久化设置
+            const savedPeriod = localStorage.getItem('maxHistorySeconds');
+            if (savedPeriod) {
+                state.maxHistorySeconds = Number(savedPeriod);
+                document.querySelector('.settings-input[type="number"]').value = savedPeriod;
+            }
+            const savedPort = localStorage.getItem('obsPort');
+            if (savedPort) {
+                document.getElementById('obs-port').value = savedPort;
+            }
+
+            // 监听 Tauri 事件
+            if (window.__TAURI__) {
+                const { listen } = window.__TAURI__.event;
+                await listen('heart-rate-update', (event) => {
+                    const { value, sensorContact } = event.payload;
+                    setHeartRate(value);
+
+                    const heart = document.querySelector('.heart');
+                    state.lastUpdate = Date.now();
+                    heart.classList.remove('connected', 'no-contact', 'disconnected');
+
+                    if (sensorContact === true) {
+                        heart.classList.add('connected');
+                        heart.title = '已连接 · 接触良好';
+                    } else if (sensorContact === false) {
+                        heart.classList.add('no-contact');
+                        heart.title = '已连接 · 未接触皮肤';
+                    } else {
+                        heart.classList.add('connected');
+                        heart.title = '已连接';
+                    }
+                });
+
+                // 心跳超时检测：超过 5 秒无数据视为断开
+                setInterval(() => {
+                    if (state.lastUpdate && Date.now() - state.lastUpdate > 5000) {
+                        const heart = document.querySelector('.heart');
+                        heart.classList.remove('connected', 'no-contact');
+                        heart.classList.add('disconnected');
+                        heart.title = '未连接';
+                    }
+                }, 2000);
+
+                // 托盘菜单事件
+                await listen('toggle-settings', () => {
+                    if (!state.isSettingsOpen) toggleSettings(false);
+                });
+                await listen('pin-toggled', () => {
+                    togglePin(false);
+                });
+                await listen('obs-state-changed', (event) => {
+                    state.isObsRunning = event.payload;
+                    localStorage.setItem('obsRunning', event.payload);
+                    updateObsButton();
+                });
+
+                // OBS 端口变更持久化
+                document.getElementById('obs-port').addEventListener('change', function() {
+                    localStorage.setItem('obsPort', this.value);
+                });
+
+                // 鼠标进入/离开可交互区域
+                const interactiveArea = document.getElementById('interactive-area');
+                interactiveArea.addEventListener('mouseenter', async () => {
+                    if (state.isPinned && state.isClickThrough) {
+                        await setClickThrough(false);
+                    }
+                });
+                interactiveArea.addEventListener('mouseleave', async () => {
+                    if (state.isPinned && !state.isClickThrough) {
+                        await setClickThrough(true);
+                    }
+                });
+
+                // 检查 OBS 服务器状态
+                state.isObsRunning = localStorage.getItem('obsRunning') === 'true';
+                updateObsButton();
+            } else {
+                // 非 Tauri 环境（OBS 浏览器源）
+                console.log('Running in browser mode');
+                startPolling();
+            }
+        }
+
+        // 轮询模式（用于 OBS 浏览器源）
+        async function startPolling() {
             while (true) {
                 try {
-                    let response = await fetch('/heartrate')
-                    let heartRate = Number(await response.json())
-                    setHeartRate(heartRate)
-                    console.log("Heart Rate: ", heartRate)
+                    let response = await fetch('/heartrate');
+                    let heartRate = Number(await response.json());
+                    setHeartRate(heartRate);
                 } catch (err) {
-                    console.error(err)
+                    console.error(err);
                 }
             }
         }
 
-        if (document.location.protocol != 'file:') {
-            updateHeartRate()
-        } else {
-            window.addEventListener('load', () => setHeartRate(60))
-        }
+        // 页面加载后初始化
+        window.addEventListener('load', init);
     </script>
 </head>
 
 <body>
-    <div id="heart" class="heart"></div>
-    <div id="heart-rate-number"></div>
+    <div class="container" id="drag-area">
+        <!-- 心率主显示 -->
+        <div class="heart-rate-main">
+            <div class="heart disconnected"></div>
+            <div id="heart-rate-number">--</div>
+        </div>
+
+        <!-- 统计信息 -->
+        <div class="stats">
+            <div class="stat-item">
+                <span id="icon-max" class="stat-icon"></span>
+                <span>最高:</span>
+                <span id="stat-max" class="stat-value">--</span>
+            </div>
+            <div class="stat-item">
+                <span id="icon-avg" class="stat-icon"></span>
+                <span>平均:</span>
+                <span id="stat-avg" class="stat-value">--</span>
+            </div>
+        </div>
+
+        <!-- 控制按钮 -->
+        <div id="interactive-area" class="controls">
+            <button id="btn-pin" class="control-btn" onclick="handleBtnClick(event, 'pin')" title="未固定"></button>
+            <button id="btn-obs" class="control-btn" onclick="handleBtnClick(event, 'obs')" title="OBS Server"></button>
+            <button id="btn-settings" class="control-btn" onclick="handleBtnClick(event, 'settings')" title="设置"></button>
+        </div>
+
+        <!-- 设置面板遮罩 -->
+        <div id="settings-overlay" class="settings-overlay" onclick="closeSettings()" onmousedown="event.stopPropagation()"></div>
+
+        <!-- 设置面板 -->
+        <div id="settings-panel" class="settings-panel" onmousedown="event.stopPropagation()">
+            <div class="settings-title">
+                <span>设置</span>
+                <span id="icon-close" class="settings-close" onclick="toggleSettings()"></span>
+            </div>
+            <div class="settings-row">
+                <span class="settings-label">统计周期 (秒)</span>
+                <input type="number" class="settings-input" value="60" min="10" max="3600"
+                    onchange="updatePeriod(Number(this.value))">
+            </div>
+            <div class="settings-row">
+                <span class="settings-label">OBS 端口</span>
+                <input type="number" id="obs-port" class="settings-input" value="3030" min="1024" max="65535">
+            </div>
+        </div>
+    </div>
 </body>
 
 </html>
