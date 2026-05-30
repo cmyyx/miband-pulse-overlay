@@ -38,11 +38,12 @@ struct AppState {
 
 #[cfg(target_os = "windows")]
 mod border_strip {
-    use std::sync::atomic::{AtomicPtr, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::*;
 
     static ORIGINAL_WNDPROC: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+    static SUBCLASS_INSTALLED: AtomicBool = AtomicBool::new(false);
 
     unsafe extern "system" fn subclass_proc(
         hwnd: HWND,
@@ -74,18 +75,14 @@ mod border_strip {
     }
 
     pub unsafe fn install_subclass(hwnd: HWND) {
+        // 只安装一次，避免重复安装导致栈溢出
+        if SUBCLASS_INSTALLED.load(Ordering::Relaxed) {
+            return;
+        }
+        SUBCLASS_INSTALLED.store(true, Ordering::Relaxed);
         let current = GetWindowLongPtrW(hwnd, GWLP_WNDPROC);
         ORIGINAL_WNDPROC.store(current as *mut (), Ordering::Relaxed);
         let _ = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, subclass_proc as *const () as usize as isize);
-    }
-
-    pub unsafe fn clip_non_client_area(hwnd: HWND, width: i32, height: i32) {
-        use windows::Win32::Graphics::Gdi::{CreateRectRgn, SetWindowRgn};
-        // 创建一个与窗口客户区大小相同的区域，裁剪掉非客户区
-        let hrgn = CreateRectRgn(0, 0, width, height);
-        if !hrgn.is_invalid() {
-            let _ = SetWindowRgn(hwnd, hrgn, true);
-        }
     }
 }
 
@@ -163,11 +160,6 @@ unsafe fn strip_all_borders(window: &tauri::WebviewWindow) {
     // 剥离父窗口边框
     strip_window_borders(parent_hwnd);
     disable_dwm_border(parent_hwnd);
-
-    // 使用 SetWindowRgn 裁剪掉非客户区（边框和标题栏）
-    if let Ok(outer_size) = window.outer_size() {
-        border_strip::clip_non_client_area(parent_hwnd, outer_size.width as i32, outer_size.height as i32);
-    }
 
     // 查找并剥离 WebView2 子窗口边框
     let child = FindWindowExW(parent_hwnd, None, None, None).unwrap_or(HWND::default());
