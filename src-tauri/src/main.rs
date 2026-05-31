@@ -216,6 +216,13 @@ async fn set_always_on_top(window: tauri::WebviewWindow, always: bool) -> Result
 }
 
 #[tauri::command]
+async fn resize_window(window: tauri::WebviewWindow, width: f64, height: f64) -> Result<(), String> {
+    window
+        .set_size(tauri::Size::Logical(tauri::LogicalSize { width, height }))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn start_dragging(window: tauri::WebviewWindow) -> Result<(), String> {
     window.start_dragging().map_err(|e| e.to_string())?;
     Ok(())
@@ -589,6 +596,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             toggle_click_through,
             set_always_on_top,
+            resize_window,
             start_dragging,
             toggle_web_server,
             reset_window_position,

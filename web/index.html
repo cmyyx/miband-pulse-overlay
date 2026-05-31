@@ -365,6 +365,25 @@
             return {};
         }
 
+        async function resizeToContent() {
+            const container = document.querySelector('.container');
+            const statValues = document.querySelectorAll('.stat-value');
+            const original = [];
+            statValues.forEach(el => { original.push(el.textContent); el.textContent = '8888'; });
+            let maxChildW = 0;
+            for (const child of container.children) {
+                maxChildW = Math.max(maxChildW, child.scrollWidth);
+            }
+            statValues.forEach((el, i) => { el.textContent = original[i]; });
+            const style = getComputedStyle(container);
+            const padX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+            const width = Math.ceil(maxChildW + padX);
+            const height = Math.ceil(container.getBoundingClientRect().height);
+            if (window.__TAURI__) {
+                await window.__TAURI__.core.invoke('resize_window', { width, height });
+            }
+        }
+
         // 设置心率
         function setHeartRate(heartRate) {
             state.heartRate = heartRate;
@@ -490,8 +509,7 @@
 
         // 设置拖动功能
         function setupDrag() {
-            const dragArea = document.getElementById('drag-area');
-            dragArea.addEventListener('mousedown', async (e) => {
+            document.body.addEventListener('mousedown', async (e) => {
                 if (e.target.closest('#interactive-area, #settings-panel, #settings-overlay, button, input')) {
                     return;
                 }
@@ -630,6 +648,9 @@
                 if (state.isObsRunning) {
                     toggleObs();
                 }
+
+                // 将窗口缩放到内容实际大小
+                await resizeToContent();
             } else {
                 // 非 Tauri 环境（OBS 浏览器源）
                 console.log('Running in browser mode');
