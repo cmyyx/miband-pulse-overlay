@@ -327,6 +327,8 @@
             isClickThrough: false,
             isSettingsOpen: false,
             isObsRunning: false,
+            autoHide: false,
+            isAutoHidden: false,
             lastUpdate: 0
         };
 
@@ -337,6 +339,7 @@
                 obsRunning: state.isObsRunning,
                 obsPort: document.getElementById('obs-port')?.value || '3030',
                 maxHistorySeconds: state.maxHistorySeconds,
+                autoHide: state.autoHide,
             };
         }
 
@@ -577,13 +580,20 @@
             // 监听 Tauri 事件
             if (window.__TAURI__) {
                 const { listen } = window.__TAURI__.event;
-                await listen('heart-rate-update', (event) => {
+                await listen('heart-rate-update', async (event) => {
                     const { value, sensorContact } = event.payload;
                     setHeartRate(value);
 
                     const heart = document.querySelector('.heart');
                     state.lastUpdate = Date.now();
                     heart.classList.remove('connected', 'no-contact', 'disconnected');
+
+                    if (state.isAutoHidden) {
+                        state.isAutoHidden = false;
+                        try {
+                            await window.__TAURI__.core.invoke('show_window');
+                        } catch (e) { console.error('show_window:', e); }
+                    }
 
                     if (sensorContact === true) {
                         heart.classList.add('connected');
@@ -598,12 +608,23 @@
                 });
 
                 // 心跳超时检测：超过 5 秒无数据视为断开
-                setInterval(() => {
+                state.lastUpdate = Date.now();
+                setInterval(async () => {
                     if (state.lastUpdate && Date.now() - state.lastUpdate > 5000) {
                         const heart = document.querySelector('.heart');
                         heart.classList.remove('connected', 'no-contact');
                         heart.classList.add('disconnected');
                         heart.title = '未连接';
+                        document.getElementById('heart-rate-number').innerText = '--';
+                        state.history = [];
+                        document.getElementById('stat-max').innerText = '--';
+                        document.getElementById('stat-avg').innerText = '--';
+                        if (state.autoHide && !state.isAutoHidden) {
+                            state.isAutoHidden = true;
+                            try {
+                                await window.__TAURI__.core.invoke('hide_window');
+                            } catch (e) { console.error('hide_window:', e); }
+                        }
                     }
                 }, 2000);
 
@@ -613,6 +634,13 @@
                 });
                 await listen('pin-toggled', () => {
                     togglePin(false);
+                });
+                await listen('toggle-auto-hide', (event) => {
+                    state.autoHide = event.payload;
+                    if (!event.payload) {
+                        state.isAutoHidden = false;
+                    }
+                    saveAllSettings();
                 });
                 await listen('obs-state-changed', (event) => {
                     state.isObsRunning = event.payload;
@@ -629,6 +657,11 @@
                 // 检查 OBS 服务器状态
                 state.isObsRunning = settings.obsRunning === true;
                 updateObsButton();
+
+                // 恢复自动隐藏状态
+                if (settings.autoHide === true) {
+                    state.autoHide = true;
+                }
 
                 // 恢复固定状态
                 if (settings.isPinned === true) {

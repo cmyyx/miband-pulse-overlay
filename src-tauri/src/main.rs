@@ -6,7 +6,7 @@ use serde::Serialize;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{CheckMenuItem, Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, State,
 };
@@ -28,10 +28,13 @@ struct AppState {
     web_server_running: Arc<RwLock<bool>>,
     is_pinned: Arc<Mutex<bool>>,
     is_settings_open: Arc<Mutex<bool>>,
+    auto_hide: Arc<Mutex<bool>>,
+    auto_hidden: Arc<Mutex<bool>>,
     /// 托盘菜单项（用于动态更新文字）
     pin_menu_item: Arc<Mutex<Option<MenuItem<tauri::Wry>>>>,
     settings_menu_item: Arc<Mutex<Option<MenuItem<tauri::Wry>>>>,
     obs_menu_item: Arc<Mutex<Option<MenuItem<tauri::Wry>>>>,
+    auto_hide_menu_item: Arc<Mutex<Option<CheckMenuItem<tauri::Wry>>>>,
 }
 
 // ── Windows 窗口边框剥离（使用窗口子类化拦截非客户区激活消息） ─────────────────────────────────
@@ -229,6 +232,18 @@ async fn start_dragging(window: tauri::WebviewWindow) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn hide_window(window: tauri::WebviewWindow, state: State<'_, AppState>) -> Result<(), String> {
+    *state.auto_hidden.lock().unwrap() = true;
+    window.hide().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn show_window(window: tauri::WebviewWindow, state: State<'_, AppState>) -> Result<(), String> {
+    *state.auto_hidden.lock().unwrap() = false;
+    window.show().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn toggle_web_server(
     state: State<'_, AppState>,
     port: Option<u16>,
@@ -359,6 +374,14 @@ fn update_obs_menu(app: &AppHandle, running: bool) {
     }
 }
 
+fn update_auto_hide_menu(app: &AppHandle, enabled: bool) {
+    let state = app.state::<AppState>();
+    let mi = state.auto_hide_menu_item.lock().unwrap();
+    if let Some(ref item) = *mi {
+        let _ = item.set_checked(enabled);
+    }
+}
+
 // ── Web 服务器 ─────────────────────────────────────────────────────
 
 async fn start_web_server(
@@ -402,9 +425,12 @@ fn main() {
             web_server_running: Arc::new(RwLock::new(false)),
             is_pinned: Arc::new(Mutex::new(false)),
             is_settings_open: Arc::new(Mutex::new(false)),
+            auto_hide: Arc::new(Mutex::new(false)),
+            auto_hidden: Arc::new(Mutex::new(false)),
             pin_menu_item: Arc::new(Mutex::new(None)),
             settings_menu_item: Arc::new(Mutex::new(None)),
             obs_menu_item: Arc::new(Mutex::new(None)),
+            auto_hide_menu_item: Arc::new(Mutex::new(None)),
         })
         .setup(|app| {
             // ── 系统托盘菜单 ──────────────────────────────────────
@@ -419,18 +445,46 @@ fn main() {
             let show_i = MenuItem::with_id(app, "show", "Show Window", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
 
+            // 从持久化设置恢复 auto_hide 状态
+            let initial_auto_hide = app
+                .path()
+                .app_data_dir()
+                .ok()
+                .and_then(|p| {
+                    let _ = std::fs::create_dir_all(&p);
+                    let settings_file = p.join("settings.json");
+                    std::fs::read_to_string(&settings_file).ok()
+                })
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                .and_then(|v| v.get("autoHide").and_then(|v| v.as_bool()))
+                .unwrap_or(false);
+            {
+                let state = app.state::<AppState>();
+                *state.auto_hide.lock().unwrap() = initial_auto_hide;
+            }
+            let auto_hide_item = CheckMenuItem::with_id(
+                app,
+                "toggle-auto-hide",
+                "自动隐藏",
+                true,
+                initial_auto_hide,
+                None::<&str>,
+            )?;
+
             // 保存菜单项引用到 AppState，用于后续动态更新文字
             {
                 let state = app.state::<AppState>();
                 *state.pin_menu_item.lock().unwrap() = Some(pin_item.clone());
                 *state.obs_menu_item.lock().unwrap() = Some(obs_item.clone());
                 *state.settings_menu_item.lock().unwrap() = Some(settings_item.clone());
+                *state.auto_hide_menu_item.lock().unwrap() = Some(auto_hide_item.clone());
             }
 
             let menu = Menu::with_items(
                 app,
                 &[
-                    &pin_item, &obs_item, &settings_item, &reset_pos, &open_data, &show_i, &quit_i,
+                    &pin_item, &obs_item, &settings_item, &auto_hide_item, &reset_pos, &open_data,
+                    &show_i, &quit_i,
                 ],
             )?;
 
@@ -497,6 +551,20 @@ fn main() {
                             let _ = window.set_focus();
                         }
                         let _ = app.emit("toggle-settings", ());
+                    }
+                    "toggle-auto-hide" => {
+                        let state = app.state::<AppState>();
+                        let mut ah = state.auto_hide.lock().unwrap();
+                        *ah = !*ah;
+                        update_auto_hide_menu(app, *ah);
+                        let _ = app.emit("toggle-auto-hide", *ah);
+                        if !*ah {
+                            *state.auto_hidden.lock().unwrap() = false;
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
                     }
                     "open-data-dir" => {
                         let app_handle = app.clone();
@@ -598,6 +666,8 @@ fn main() {
             set_always_on_top,
             resize_window,
             start_dragging,
+            hide_window,
+            show_window,
             toggle_web_server,
             reset_window_position,
             notify_pin_state,
