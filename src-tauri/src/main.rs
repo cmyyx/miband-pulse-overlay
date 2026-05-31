@@ -92,15 +92,13 @@ unsafe fn strip_window_borders(hwnd: windows::Win32::Foundation::HWND) {
         GetWindowLongW, SetWindowLongW, SetWindowPos, GWL_EXSTYLE, GWL_STYLE, HWND_TOP,
         SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_BORDER, WS_CAPTION,
         WS_DLGFRAME, WS_EX_CLIENTEDGE, WS_EX_STATICEDGE, WS_EX_WINDOWEDGE, WS_MAXIMIZEBOX,
-        WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
+        WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
     };
 
-    // 移除所有边框/标题栏/系统菜单样式，改为 WS_POPUP
     let style = GetWindowLongW(hwnd, GWL_STYLE);
-    let mut new_style = style
+    let new_style = style
         & !(WS_THICKFRAME.0 | WS_BORDER.0 | WS_DLGFRAME.0 | WS_CAPTION.0 | WS_SYSMENU.0
             | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0) as i32;
-    new_style |= WS_POPUP.0 as i32;
     let _ = SetWindowLongW(hwnd, GWL_STYLE, new_style);
 
     // 移除扩展边框样式
@@ -144,7 +142,6 @@ unsafe fn disable_dwm_border(hwnd: windows::Win32::Foundation::HWND) {
 #[cfg(target_os = "windows")]
 unsafe fn strip_all_borders(window: &tauri::WebviewWindow) {
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::FindWindowExW;
 
     // Tauri 2 中 hwnd() 返回 Result<HWND, Error>
     let hwnd_result = window.hwnd();
@@ -160,14 +157,7 @@ unsafe fn strip_all_borders(window: &tauri::WebviewWindow) {
     // 剥离父窗口边框
     strip_window_borders(parent_hwnd);
     disable_dwm_border(parent_hwnd);
-
-    // 查找并剥离 WebView2 子窗口边框
-    let child = FindWindowExW(parent_hwnd, None, None, None).unwrap_or(HWND::default());
-    if child.0.is_null() {
-        return;
-    }
-    strip_window_borders(child);
-    disable_dwm_border(child);
+    // 注意：不处理 WebView2 子窗口，保持其 WS_CHILD 风格以确保鼠标输入正常
 }
 
 // ── 窗口位置持久化 ────────────────────────────────────────────────
@@ -214,12 +204,6 @@ async fn toggle_click_through(window: tauri::WebviewWindow, ignore: bool) -> Res
     window
         .set_ignore_cursor_events(ignore)
         .map_err(|e| e.to_string())?;
-
-    #[cfg(target_os = "windows")]
-    unsafe {
-        strip_all_borders(&window);
-    }
-
     Ok(())
 }
 
@@ -270,6 +254,45 @@ async fn reset_window_position(window: tauri::WebviewWindow, app: AppHandle) -> 
         save_window_position(&app, pos.x, pos.y);
     }
     Ok(())
+}
+
+#[tauri::command]
+fn open_data_dir(app: AppHandle) -> Result<String, String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?;
+    let path_str = data_dir.to_string_lossy().to_string();
+    if std::process::Command::new("explorer")
+        .arg(&data_dir)
+        .spawn()
+        .is_err()
+    {
+        return Err(format!("无法打开目录: {}", path_str));
+    }
+    Ok(path_str)
+}
+
+fn settings_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    let data_dir = app.path().app_data_dir().ok()?;
+    let _ = std::fs::create_dir_all(&data_dir);
+    Some(data_dir.join("settings.json"))
+}
+
+#[tauri::command]
+fn load_settings(app: AppHandle) -> Result<String, String> {
+    let path = settings_path(&app).ok_or("无法获取数据目录")?;
+    if path.exists() {
+        std::fs::read_to_string(&path).map_err(|e| e.to_string())
+    } else {
+        Ok("{}".to_string())
+    }
+}
+
+#[tauri::command]
+fn save_settings(app: AppHandle, settings: String) -> Result<(), String> {
+    let path = settings_path(&app).ok_or("无法获取数据目录")?;
+    std::fs::write(&path, &settings).map_err(|e| e.to_string())
 }
 
 /// 前端通知后端：pin 状态变化（由 togglePin() 调用）
@@ -385,6 +408,7 @@ fn main() {
                 MenuItem::with_id(app, "toggle-settings", "打开设置面板", true, None::<&str>)?;
             let reset_pos =
                 MenuItem::with_id(app, "reset-position", "重置窗口位置", true, None::<&str>)?;
+            let open_data = MenuItem::with_id(app, "open-data-dir", "打开数据目录", true, None::<&str>)?;
             let show_i = MenuItem::with_id(app, "show", "Show Window", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
 
@@ -399,7 +423,7 @@ fn main() {
             let menu = Menu::with_items(
                 app,
                 &[
-                    &pin_item, &obs_item, &settings_item, &reset_pos, &show_i, &quit_i,
+                    &pin_item, &obs_item, &settings_item, &reset_pos, &open_data, &show_i, &quit_i,
                 ],
             )?;
 
@@ -467,6 +491,16 @@ fn main() {
                         }
                         let _ = app.emit("toggle-settings", ());
                     }
+                    "open-data-dir" => {
+                        let app_handle = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            if let Ok(data_dir) = app_handle.path().app_data_dir() {
+                                let _ = std::process::Command::new("explorer")
+                                    .arg(&data_dir)
+                                    .spawn();
+                            }
+                        });
+                    }
                     "reset-position" => {
                         if let Some(window) = app.get_webview_window("main") {
                             let app_handle = app.clone();
@@ -508,7 +542,7 @@ fn main() {
                     center_window(&window);
                 }
 
-                // Windows 边框剥离 - 在窗口显示前立即执行
+                // Windows 边框剥离
                 #[cfg(target_os = "windows")]
                 {
                     unsafe {
@@ -559,7 +593,10 @@ fn main() {
             toggle_web_server,
             reset_window_position,
             notify_pin_state,
-            notify_settings_toggled
+            notify_settings_toggled,
+            open_data_dir,
+            load_settings,
+            save_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -37,10 +37,12 @@
         }
 
         /* 移除所有可能的边框 */
-        * {
+        html, body {
             border: none !important;
             outline: none !important;
-            -webkit-outline: none !important;
+        }
+        * {
+            outline: none !important;
         }
 
         /* 针对 Tauri WebView 的特殊处理 */
@@ -156,13 +158,9 @@
             transition: opacity 0.3s;
         }
 
-        /* 穿透模式下，鼠标悬停才显示按钮 */
+        /* 穿透模式下始终隐藏按钮 */
         .controls.click-through-mode {
-            opacity: 0;
-        }
-
-        .controls.click-through-mode:hover {
-            opacity: 1;
+            opacity: 0 !important;
         }
 
         .control-btn {
@@ -182,8 +180,8 @@
         }
 
         .control-btn:hover {
-            background: rgba(50, 50, 60, 0.8);
-            border-color: rgba(255, 255, 255, 0.5);
+            background: rgba(60, 60, 75, 0.85);
+            border-color: rgba(255, 255, 255, 0.6);
         }
 
         .control-btn.active {
@@ -332,6 +330,41 @@
             lastUpdate: 0
         };
 
+        // ── 持久化设置 ──────────────────────────────────────
+        function collectSettings() {
+            return {
+                isPinned: state.isPinned,
+                obsRunning: state.isObsRunning,
+                obsPort: document.getElementById('obs-port')?.value || '3030',
+                maxHistorySeconds: state.maxHistorySeconds,
+            };
+        }
+
+        async function saveAllSettings() {
+            const data = collectSettings();
+            if (window.__TAURI__) {
+                try {
+                    await window.__TAURI__.core.invoke('save_settings', { settings: JSON.stringify(data) });
+                } catch (e) { console.error('save_settings:', e); }
+            }
+            localStorage.setItem('settings', JSON.stringify(data));
+        }
+
+        async function loadAllSettings() {
+            if (window.__TAURI__) {
+                try {
+                    const json = await window.__TAURI__.core.invoke('load_settings');
+                    const loaded = JSON.parse(json);
+                    if (loaded && loaded.isPinned !== undefined) return loaded;
+                } catch (e) { console.error('load_settings:', e); }
+            }
+            try {
+                const backup = localStorage.getItem('settings');
+                if (backup) return JSON.parse(backup);
+            } catch (e) {}
+            return {};
+        }
+
         // 设置心率
         function setHeartRate(heartRate) {
             state.heartRate = heartRate;
@@ -365,12 +398,19 @@
         // 切换固定（合并锁定位置 + 鼠标穿透）
         async function togglePin(notify = true) {
             state.isPinned = !state.isPinned;
+
             const btn = document.getElementById('btn-pin');
             btn.classList.toggle('active', state.isPinned);
             btn.innerHTML = state.isPinned ? icons.pin : icons.pinOff;
             btn.title = state.isPinned ? '已固定 · 鼠标穿透中' : '未固定';
 
-            await setClickThrough(state.isPinned);
+            state.isClickThrough = state.isPinned;
+            document.getElementById('interactive-area').classList.toggle('click-through-mode', state.isPinned);
+            saveAllSettings();
+
+            if (window.__TAURI__) {
+                await window.__TAURI__.core.invoke('toggle_click_through', { ignore: state.isPinned });
+            }
 
             if (notify && window.__TAURI__) {
                 await window.__TAURI__.core.invoke('notify_pin_state', { pinned: state.isPinned });
@@ -402,7 +442,7 @@
                     const port = portInput ? Number(portInput.value) : 3030;
                     const running = await window.__TAURI__.core.invoke('toggle_web_server', { port });
                     state.isObsRunning = running;
-                    localStorage.setItem('obsRunning', running);
+                    saveAllSettings();
                     updateObsButton();
                 }
             } catch (e) {
@@ -442,7 +482,7 @@
         // 更新统计周期
         function updatePeriod(seconds) {
             state.maxHistorySeconds = seconds;
-            localStorage.setItem('maxHistorySeconds', seconds);
+            saveAllSettings();
             const cutoff = Date.now() - (seconds * 1000);
             state.history = state.history.filter(h => h.time > cutoff);
             updateStats();
@@ -451,8 +491,10 @@
         // 设置拖动功能
         function setupDrag() {
             const dragArea = document.getElementById('drag-area');
-
-            dragArea.addEventListener('mousedown', async () => {
+            dragArea.addEventListener('mousedown', async (e) => {
+                if (e.target.closest('#interactive-area, #settings-panel, #settings-overlay, button, input')) {
+                    return;
+                }
                 if (window.__TAURI__) {
                     await window.__TAURI__.core.invoke('start_dragging');
                 }
@@ -488,23 +530,30 @@
             document.getElementById('btn-obs').innerHTML = icons.monitor;
             document.getElementById('icon-close').innerHTML = '&times;';
 
-            // 阻止按钮区域的 mousedown 冒泡到拖拽区
-            document.getElementById('interactive-area').addEventListener('mousedown', (e) => {
+            // 按钮事件绑定（用 addEventListener 替代 onclick 属性）
+            document.getElementById('btn-pin').addEventListener('click', () => togglePin());
+            document.getElementById('btn-obs').addEventListener('click', () => toggleObs());
+            document.getElementById('btn-settings').addEventListener('click', () => toggleSettings());
+            document.getElementById('icon-close').addEventListener('click', (e) => {
                 e.stopPropagation();
+                toggleSettings();
+            });
+            document.getElementById('settings-overlay').addEventListener('click', (e) => {
+                e.stopPropagation();
+                closeSettings();
             });
 
             // 设置整个窗口可拖动
             setupDrag();
 
             // 恢复持久化设置
-            const savedPeriod = localStorage.getItem('maxHistorySeconds');
-            if (savedPeriod) {
-                state.maxHistorySeconds = Number(savedPeriod);
-                document.querySelector('.settings-input[type="number"]').value = savedPeriod;
+            const settings = await loadAllSettings();
+            if (settings.maxHistorySeconds) {
+                state.maxHistorySeconds = Number(settings.maxHistorySeconds);
+                document.querySelector('.settings-input[type="number"]').value = settings.maxHistorySeconds;
             }
-            const savedPort = localStorage.getItem('obsPort');
-            if (savedPort) {
-                document.getElementById('obs-port').value = savedPort;
+            if (settings.obsPort) {
+                document.getElementById('obs-port').value = settings.obsPort;
             }
 
             // 监听 Tauri 事件
@@ -542,38 +591,45 @@
 
                 // 托盘菜单事件
                 await listen('toggle-settings', () => {
-                    if (!state.isSettingsOpen) toggleSettings(false);
+                    toggleSettings(false);
                 });
                 await listen('pin-toggled', () => {
                     togglePin(false);
                 });
                 await listen('obs-state-changed', (event) => {
                     state.isObsRunning = event.payload;
-                    localStorage.setItem('obsRunning', event.payload);
+                    saveAllSettings();
                     updateObsButton();
                 });
 
                 // OBS 端口变更持久化
                 document.getElementById('obs-port').addEventListener('change', function() {
-                    localStorage.setItem('obsPort', this.value);
+                    saveAllSettings();
                 });
 
                 // 鼠标进入/离开可交互区域
-                const interactiveArea = document.getElementById('interactive-area');
-                interactiveArea.addEventListener('mouseenter', async () => {
-                    if (state.isPinned && state.isClickThrough) {
-                        await setClickThrough(false);
-                    }
-                });
-                interactiveArea.addEventListener('mouseleave', async () => {
-                    if (state.isPinned && !state.isClickThrough) {
-                        await setClickThrough(true);
-                    }
-                });
-
                 // 检查 OBS 服务器状态
-                state.isObsRunning = localStorage.getItem('obsRunning') === 'true';
+                state.isObsRunning = settings.obsRunning === true;
                 updateObsButton();
+
+                // 恢复固定状态
+                if (settings.isPinned === true) {
+                    state.isPinned = true;
+                    state.isClickThrough = true;
+                    document.getElementById('btn-pin').classList.add('active');
+                    document.getElementById('btn-pin').innerHTML = icons.pin;
+                    document.getElementById('btn-pin').title = '已固定 · 鼠标穿透中';
+                    document.getElementById('interactive-area').classList.add('click-through-mode');
+                    if (window.__TAURI__) {
+                        window.__TAURI__.core.invoke('toggle_click_through', { ignore: true });
+                        window.__TAURI__.core.invoke('notify_pin_state', { pinned: true });
+                    }
+                }
+
+                // 启动 OBS 服务器（如果之前是运行状态）
+                if (state.isObsRunning) {
+                    toggleObs();
+                }
             } else {
                 // 非 Tauri 环境（OBS 浏览器源）
                 console.log('Running in browser mode');
@@ -623,19 +679,19 @@
 
         <!-- 控制按钮 -->
         <div id="interactive-area" class="controls">
-            <button id="btn-pin" class="control-btn" onclick="handleBtnClick(event, 'pin')" title="未固定"></button>
-            <button id="btn-obs" class="control-btn" onclick="handleBtnClick(event, 'obs')" title="OBS Server"></button>
-            <button id="btn-settings" class="control-btn" onclick="handleBtnClick(event, 'settings')" title="设置"></button>
+            <button id="btn-pin" class="control-btn" title="未固定"></button>
+            <button id="btn-obs" class="control-btn" title="OBS Server"></button>
+            <button id="btn-settings" class="control-btn" title="设置"></button>
         </div>
 
         <!-- 设置面板遮罩 -->
-        <div id="settings-overlay" class="settings-overlay" onclick="closeSettings()" onmousedown="event.stopPropagation()"></div>
+        <div id="settings-overlay" class="settings-overlay"></div>
 
         <!-- 设置面板 -->
-        <div id="settings-panel" class="settings-panel" onmousedown="event.stopPropagation()">
+        <div id="settings-panel" class="settings-panel">
             <div class="settings-title">
                 <span>设置</span>
-                <span id="icon-close" class="settings-close" onclick="toggleSettings()"></span>
+                <span id="icon-close" class="settings-close"></span>
             </div>
             <div class="settings-row">
                 <span class="settings-label">统计周期 (秒)</span>
