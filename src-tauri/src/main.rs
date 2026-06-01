@@ -240,7 +240,9 @@ async fn hide_window(window: tauri::WebviewWindow, state: State<'_, AppState>) -
 #[tauri::command]
 async fn show_window(window: tauri::WebviewWindow, state: State<'_, AppState>) -> Result<(), String> {
     *state.auto_hidden.lock().unwrap() = false;
-    window.show().map_err(|e| e.to_string())
+    window.show().map_err(|e| e.to_string())?;
+    let _ = window.set_focus();
+    Ok(())
 }
 
 #[tauri::command]

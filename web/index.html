@@ -628,6 +628,15 @@
                     }
                 }, 2000);
 
+                // 每 5 秒重新置顶，防止被其他 topmost 窗口遮盖
+                setInterval(async () => {
+                    if (!state.isAutoHidden) {
+                        try {
+                            await window.__TAURI__.core.invoke('set_always_on_top', { always: true });
+                        } catch (e) { /* ignore */ }
+                    }
+                }, 5000);
+
                 // 托盘菜单事件
                 await listen('toggle-settings', () => {
                     toggleSettings(false);
