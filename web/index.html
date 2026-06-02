@@ -607,10 +607,14 @@
                     }
                 });
 
-                // 心跳超时检测：超过 5 秒无数据视为断开
+                // 心跳超时检测：
+                //   > 5 秒无数据 → 显示断开状态（灰色 --）
+                //   > 10 秒无数据 → 自动隐藏窗口（若启用自动隐藏）
                 state.lastUpdate = Date.now();
                 setInterval(async () => {
-                    if (state.lastUpdate && Date.now() - state.lastUpdate > 5000) {
+                    if (!state.lastUpdate) return;
+                    const elapsed = Date.now() - state.lastUpdate;
+                    if (elapsed > 5000) {
                         const heart = document.querySelector('.heart');
                         heart.classList.remove('connected', 'no-contact');
                         heart.classList.add('disconnected');
@@ -619,7 +623,7 @@
                         state.history = [];
                         document.getElementById('stat-max').innerText = '--';
                         document.getElementById('stat-avg').innerText = '--';
-                        if (state.autoHide && !state.isAutoHidden) {
+                        if (elapsed > 10000 && state.autoHide && !state.isAutoHidden) {
                             state.isAutoHidden = true;
                             try {
                                 await window.__TAURI__.core.invoke('hide_window');

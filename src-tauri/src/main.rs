@@ -30,6 +30,7 @@ struct AppState {
     is_settings_open: Arc<Mutex<bool>>,
     auto_hide: Arc<Mutex<bool>>,
     auto_hidden: Arc<Mutex<bool>>,
+    is_always_on_top: Arc<Mutex<bool>>,
     /// 托盘菜单项（用于动态更新文字）
     pin_menu_item: Arc<Mutex<Option<MenuItem<tauri::Wry>>>>,
     settings_menu_item: Arc<Mutex<Option<MenuItem<tauri::Wry>>>>,
@@ -211,10 +212,15 @@ async fn toggle_click_through(window: tauri::WebviewWindow, ignore: bool) -> Res
 }
 
 #[tauri::command]
-async fn set_always_on_top(window: tauri::WebviewWindow, always: bool) -> Result<(), String> {
+async fn set_always_on_top(window: tauri::WebviewWindow, always: bool, state: State<'_, AppState>) -> Result<(), String> {
+    let mut current = state.is_always_on_top.lock().unwrap();
+    if *current == always {
+        return Ok(());
+    }
     window
         .set_always_on_top(always)
         .map_err(|e| e.to_string())?;
+    *current = always;
     Ok(())
 }
 
@@ -429,6 +435,7 @@ fn main() {
             is_settings_open: Arc::new(Mutex::new(false)),
             auto_hide: Arc::new(Mutex::new(false)),
             auto_hidden: Arc::new(Mutex::new(false)),
+            is_always_on_top: Arc::new(Mutex::new(false)),
             pin_menu_item: Arc::new(Mutex::new(None)),
             settings_menu_item: Arc::new(Mutex::new(None)),
             obs_menu_item: Arc::new(Mutex::new(None)),
