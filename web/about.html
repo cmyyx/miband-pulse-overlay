@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>关于 MiBand Pulse Overlay</title>
+    <style>
+        :root {
+            --accent: #f20044;
+            --bg-1: #14142a;
+            --bg-2: #1f1f3d;
+            --text: #e6e6f0;
+            --text-dim: #a0a0b8;
+            --card: rgba(255, 255, 255, 0.04);
+            --border: rgba(255, 255, 255, 0.08);
+            --link: #4fa3ff;
+        }
+
+        * { box-sizing: border-box; }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+            background: linear-gradient(135deg, var(--bg-1) 0%, var(--bg-2) 100%);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                "Microsoft YaHei", sans-serif;
+            user-select: text;
+        }
+
+        .container {
+            max-width: 520px;
+            margin: 0 auto;
+            padding: 28px 28px 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+        }
+
+        header {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .logo {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            background: radial-gradient(circle at 30% 30%, var(--accent), #6a0020);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 18px rgba(242, 0, 68, 0.35);
+            flex-shrink: 0;
+        }
+
+        .logo svg { width: 28px; height: 28px; fill: #fff; }
+
+        h1 {
+            margin: 0;
+            font-size: 20px;
+            font-weight: 600;
+            letter-spacing: 0.2px;
+        }
+
+        .version {
+            color: var(--text-dim);
+            font-size: 12px;
+            margin-top: 2px;
+        }
+
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 14px 16px;
+        }
+
+        .card h2 {
+            margin: 0 0 8px;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+        }
+
+        .card p {
+            margin: 0 0 8px;
+            font-size: 13px;
+            line-height: 1.65;
+        }
+
+        .card p:last-child { margin-bottom: 0; }
+
+        .card code {
+            background: rgba(255, 255, 255, 0.06);
+            padding: 1px 6px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-family: "JetBrains Mono", "Consolas", monospace;
+        }
+
+        a.link {
+            color: var(--link);
+            text-decoration: none;
+            cursor: pointer;
+            word-break: break-all;
+        }
+
+        a.link:hover { text-decoration: underline; }
+
+        .footer {
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 11px;
+            margin-top: 4px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <div class="logo">
+                <svg viewBox="0 0 32 29.6" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M23.6,0c-3.4,0-6.3,2.7-7.6,5.6C14.7,2.7,11.8,0,8.4,0C3.8,0,0,3.8,0,8.4
+                        c0,9.4,9.5,11.9,16,21.2c6.1-9.3,16-12.1,16-21.2C32,3.8,28.2,0,23.6,0z" />
+                </svg>
+            </div>
+            <div>
+                <h1>MiBand Pulse Overlay</h1>
+                <div class="version">v0.1.0 · 桌面心率悬浮窗</div>
+            </div>
+        </header>
+
+        <section class="card">
+            <h2>开源仓库</h2>
+            <p>本仓库地址：</p>
+            <p><a class="link" href="#" data-url="https://github.com/cmyyx/miband-pulse-overlay">https://github.com/cmyyx/miband-pulse-overlay</a></p>
+        </section>
+
+        <section class="card">
+            <h2>项目说明</h2>
+            <p>本项目基于
+                <a class="link" href="#" data-url="https://github.com/Tnze/miband-heart-rate">Tnze/miband-heart-rate</a>
+                二次开发，把小米手环的实时心率显示为桌面悬浮窗，并提供可选的 OBS 广播功能。
+            </p>
+        </section>
+
+        <section class="card">
+            <h2>开源协议</h2>
+            <p>本项目采用双协议授权：</p>
+            <p>· 原作者 <a class="link" href="#" data-url="https://github.com/Tnze">Tnze</a> 编写的代码继续遵循
+                <strong>MIT License</strong>，完整文本见 <code>LICENSE-MIT</code>。</p>
+            <p>· 本仓库新增 / 修改的代码遵循
+                <strong>GNU Affero General Public License v3.0 (AGPL-3.0)</strong>，
+                完整文本见 <code>LICENSE-AGPL-3.0</code>。</p>
+            <p>详细说明见仓库根目录的 <code>LICENSE</code>。</p>
+        </section>
+
+        <div class="footer">© 2023 Tnze · 二次开发部分 © 2026 miband-pulse-overlay contributors</div>
+    </div>
+
+    <script>
+        async function openExternal(url) {
+            try {
+                const tauri = (window.__TAURI__ || {});
+                if (tauri.core && typeof tauri.core.invoke === "function") {
+                    await tauri.core.invoke("open_url", { url });
+                    return;
+                }
+            } catch (err) {
+                console.error("invoke open_url failed", err);
+            }
+            // 兜底：用浏览器打开
+            window.open(url, "_blank", "noopener");
+        }
+
+        document.querySelectorAll("a.link[data-url]").forEach((a) => {
+            a.addEventListener("click", (e) => {
+                e.preventDefault();
+                openExternal(a.getAttribute("data-url"));
+            });
+        });
+    </script>
+</body>
+
+</html>

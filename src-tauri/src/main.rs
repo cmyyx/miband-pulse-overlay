@@ -6,7 +6,7 @@ use serde::Serialize;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tauri::{
-    menu::{CheckMenuItem, Menu, MenuItem},
+    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, State,
 };
@@ -349,6 +349,15 @@ async fn notify_settings_toggled(
     Ok(())
 }
 
+/// 前端调用：在系统默认浏览器中打开外部链接
+#[tauri::command]
+fn open_url(app: AppHandle, url: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 // ── 菜单文字更新辅助函数 ──────────────────────────────────────────
 
 fn update_pin_menu(app: &AppHandle, pinned: bool) {
@@ -390,6 +399,36 @@ fn update_auto_hide_menu(app: &AppHandle, enabled: bool) {
     }
 }
 
+// ── "关于"窗口 ────────────────────────────────────────────────────
+
+const ABOUT_WINDOW_LABEL: &str = "about";
+
+/// 打开"关于"窗口：已存在则置顶聚焦，否则创建。
+fn open_about_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(ABOUT_WINDOW_LABEL) {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        return;
+    }
+
+    let result = tauri::WebviewWindowBuilder::new(
+        app,
+        ABOUT_WINDOW_LABEL,
+        tauri::WebviewUrl::App("about.html".into()),
+    )
+    .title("关于 MiBand Pulse Overlay")
+    .inner_size(460.0, 400.0)
+    .min_inner_size(420.0, 360.0)
+    .resizable(false)
+    .center()
+    .build();
+
+    if let Err(e) = result {
+        eprintln!("Failed to create about window: {e:?}");
+    }
+}
+
 // ── Web 服务器 ─────────────────────────────────────────────────────
 
 async fn start_web_server(
@@ -428,6 +467,7 @@ fn main() {
     });
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .manage(AppState {
             heart_rate_tx,
             web_server_running: Arc::new(RwLock::new(false)),
@@ -452,6 +492,14 @@ fn main() {
                 MenuItem::with_id(app, "reset-position", "重置窗口位置", true, None::<&str>)?;
             let open_data = MenuItem::with_id(app, "open-data-dir", "打开数据目录", true, None::<&str>)?;
             let show_i = MenuItem::with_id(app, "show", "Show Window", true, None::<&str>)?;
+            let about_separator = PredefinedMenuItem::separator(app)?;
+            let about_item = MenuItem::with_id(
+                app,
+                "open-about",
+                "关于 / About",
+                true,
+                None::<&str>,
+            )?;
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
 
             // 从持久化设置恢复 auto_hide 状态
@@ -493,7 +541,7 @@ fn main() {
                 app,
                 &[
                     &pin_item, &obs_item, &settings_item, &auto_hide_item, &reset_pos, &open_data,
-                    &show_i, &quit_i,
+                    &show_i, &about_separator, &about_item, &quit_i,
                 ],
             )?;
 
@@ -596,6 +644,9 @@ fn main() {
                             });
                         }
                     }
+                    "open-about" => {
+                        open_about_window(app);
+                    }
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| match event {
@@ -683,7 +734,8 @@ fn main() {
             notify_settings_toggled,
             open_data_dir,
             load_settings,
-            save_settings
+            save_settings,
+            open_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

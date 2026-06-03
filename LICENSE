@@ -1,21 +1,17 @@
-MIT License
+miband-pulse-overlay
+Copyright (c) 2023 Tnze (original author, MIT)
+Copyright (c) 2026 miband-pulse-overlay contributors (additions, AGPL-3.0)
 
-Copyright (c) 2023 Tnze
+本项目基于 [Tnze/miband-heart-rate](https://github.com/Tnze/miband-heart-rate)
+二次开发。该项目采用双协议授权：
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+1. 原作者 Tnze 编写的代码继续遵循 MIT 协议许可，完整文本见 [LICENSE-MIT](LICENSE-MIT)。
+2. 本仓库后续新增 / 修改的代码采用 GNU Affero General Public License v3.0
+   （AGPL-3.0）协议开源，完整文本见 [LICENSE-AGPL-3.0](LICENSE-AGPL-3.0)。
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+如需确定某一文件适用的协议，请参考该文件内的版权头注释以及 git 历史。
+一般规则：
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+- 在首次 fork 提交（commit 历史可追溯到 Tnze/miband-heart-rate）之前已存在的
+  文件，沿用 MIT 协议；
+- 之后新增或实质性修改的文件，遵循 AGPL-3.0 协议。

@@ -4,6 +4,11 @@
 
 把小米手环的实时心率显示为桌面悬浮窗（核心功能），同时内置一个可开关的本地 HTTP 服务（副功能），可作为 OBS 浏览器源。
 
+> 本项目基于 [Tnze/miband-heart-rate](https://github.com/Tnze/miband-heart-rate) 二次开发。
+> 原作者的代码继续遵循 MIT 协议许可，个人新增的代码采用
+> [GNU Affero General Public License v3.0 (AGPL-3.0)](https://www.gnu.org/licenses/agpl-3.0.html) 协议开源。
+> 详见根目录下的 [LICENSE](LICENSE)、[LICENSE-MIT](LICENSE-MIT) 和 [LICENSE-AGPL-3.0](LICENSE-AGPL-3.0)。
+
 ## 主要特性
 
 ### 桌面悬浮窗（核心）
@@ -72,4 +77,11 @@ cargo tauri dev
 
 ## License
 
-See [LICENSE](LICENSE).
+本项目采用双协议授权：
+
+- 原作者 [Tnze](https://github.com/Tnze) 编写的代码遵循 **MIT License**，
+  详见 [LICENSE-MIT](LICENSE-MIT)。
+- 本仓库新增 / 修改的代码遵循 **GNU Affero General Public License v3.0 (AGPL-3.0)**，
+  详见 [LICENSE-AGPL-3.0](LICENSE-AGPL-3.0)。
+
+完整说明见 [LICENSE](LICENSE)。
