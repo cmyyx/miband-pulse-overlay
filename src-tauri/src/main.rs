@@ -215,7 +215,9 @@ async fn toggle_click_through(window: tauri::WebviewWindow, ignore: bool) -> Res
 async fn set_always_on_top(window: tauri::WebviewWindow, always: bool, state: State<'_, AppState>) -> Result<(), String> {
     let mut current = state.is_always_on_top.lock().unwrap();
     if *current == always {
-        return Ok(());
+        // 状态相同但需要强制刷新 Z 序：先移除再重新插入 topmost 层
+        window.set_always_on_top(!always)
+            .map_err(|e| e.to_string())?;
     }
     window
         .set_always_on_top(always)
