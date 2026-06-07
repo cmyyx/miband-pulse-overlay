@@ -5,6 +5,7 @@ use futures_lite::stream::StreamExt;
 use serde::Serialize;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -20,6 +21,15 @@ const HRM_UUID: Uuid = bluetooth_uuid_from_u16(0x2A37);
 #[serde(rename_all = "camelCase")]
 struct HeartRate {
     value: u16,
+    sensor_contact: Option<bool>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HeartRateStats {
+    value: u16,
+    max: u16,
+    avg: u16,
     sensor_contact: Option<bool>,
 }
 
@@ -255,6 +265,7 @@ async fn show_window(window: tauri::WebviewWindow, state: State<'_, AppState>) -
 
 #[tauri::command]
 async fn toggle_web_server(
+    app: AppHandle,
     state: State<'_, AppState>,
     port: Option<u16>,
 ) -> Result<bool, String> {
@@ -267,9 +278,16 @@ async fn toggle_web_server(
         let running_flag = state.web_server_running.clone();
         let port = port.unwrap_or(3030);
 
+        // 从配置文件读取统计周期
+        let max_history_seconds = settings_path(&app)
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| v.get("maxHistorySeconds").and_then(|v| v.as_u64()))
+            .unwrap_or(60);
+
         tokio::spawn(async move {
             *running_flag.write().await = true;
-            if let Err(e) = start_web_server(rx, port).await {
+            if let Err(e) = start_web_server(rx, port, max_history_seconds).await {
                 eprintln!("Web server error: {e:?}");
             }
             *running_flag.write().await = false;
@@ -436,19 +454,106 @@ fn open_about_window(app: &AppHandle) {
 async fn start_web_server(
     rx: watch::Receiver<HeartRate>,
     port: u16,
+    max_history_seconds: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let index_html = include_str!("../../web/index.html").to_string();
 
+    struct SharedState {
+        stats: HeartRateStats,
+        last_update: Instant,
+    }
+
+    let state: Arc<std::sync::Mutex<SharedState>> =
+        Arc::new(std::sync::Mutex::new(SharedState {
+            stats: HeartRateStats {
+                value: 0,
+                max: 0,
+                avg: 0,
+                sensor_contact: None,
+            },
+            last_update: Instant::now(),
+        }));
+
+    let notify = Arc::new(tokio::sync::Notify::new());
+
+    // 后台任务：持续更新历史记录和统计数据
+    {
+        let state = state.clone();
+        let notify = notify.clone();
+        let mut rx = rx.clone();
+        tokio::spawn(async move {
+            let mut history: Vec<(Instant, u16)> = Vec::new();
+            let max_history = std::time::Duration::from_secs(max_history_seconds);
+            loop {
+                if rx.changed().await.is_err() {
+                    break;
+                }
+                let hr = rx.borrow().clone();
+                let now = Instant::now();
+                history.push((now, hr.value));
+                // 清理过期数据
+                let cutoff = now - max_history;
+                history.retain(|(t, _)| *t > cutoff);
+                // 计算统计
+                let max = history.iter().map(|(_, v)| *v).max().unwrap_or(hr.value);
+                let avg = if history.is_empty() {
+                    hr.value
+                } else {
+                    (history.iter().map(|(_, v)| *v as u64).sum::<u64>()
+                        / history.len() as u64) as u16
+                };
+                if let Ok(mut s) = state.lock() {
+                    s.stats = HeartRateStats {
+                        value: hr.value,
+                        max,
+                        avg,
+                        sensor_contact: hr.sensor_contact,
+                    };
+                    s.last_update = now;
+                }
+                notify.notify_waiters();
+            }
+        });
+    }
+
     let root = warp::path::end().map(move || warp::reply::html(index_html.clone()));
 
-    let heartrate = warp::path!("heartrate").then(move || {
-        let mut rx = rx.clone();
-        async move {
-            drop(rx.borrow_and_update());
-            rx.changed().await.unwrap();
-            warp::reply::json(&rx.borrow().value)
-        }
-    });
+    let heartrate = {
+        let state = state.clone();
+        let notify = notify.clone();
+        warp::path!("heartrate").then(move || {
+            let state = state.clone();
+            let notify = notify.clone();
+            async move {
+                let need_wait = {
+                    let s = state.lock().unwrap();
+                    s.last_update.elapsed() > std::time::Duration::from_secs(5)
+                };
+                if need_wait {
+                    // 数据不新鲜，等待新数据（最多 5 秒）
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_secs(5),
+                        notify.notified(),
+                    )
+                    .await;
+                }
+
+                let s = state.lock().unwrap();
+                let elapsed = s.last_update.elapsed();
+                // 超过 10 秒无数据视为断开，返回全零
+                if elapsed > std::time::Duration::from_secs(10) {
+                    warp::reply::json(&HeartRateStats {
+                        value: 0,
+                        max: 0,
+                        avg: 0,
+                        sensor_contact: None,
+                    })
+                } else {
+                    warp::reply::json(&s.stats)
+                }
+            }
+        })
+    };
 
     let socket_addr: SocketAddr = ([127, 0, 0, 1], port).into();
     println!("Web server listening at http://{socket_addr}");
@@ -583,9 +688,14 @@ fn main() {
                             } else {
                                 let rx = state.heart_rate_tx.subscribe();
                                 let running_flag = state.web_server_running.clone();
+                                let max_history_seconds = settings_path(&handle)
+                                    .and_then(|p| std::fs::read_to_string(p).ok())
+                                    .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                                    .and_then(|v| v.get("maxHistorySeconds").and_then(|v| v.as_u64()))
+                                    .unwrap_or(60);
                                 tokio::spawn(async move {
                                     *running_flag.write().await = true;
-                                    if let Err(e) = start_web_server(rx, 3030).await {
+                                    if let Err(e) = start_web_server(rx, 3030, max_history_seconds).await {
                                         eprintln!("Web server error: {e:?}");
                                     }
                                     *running_flag.write().await = false;
@@ -749,35 +859,85 @@ async fn start_ble_monitor(
     app_handle: AppHandle,
     heart_rate_tx: watch::Sender<HeartRate>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let adapter = Adapter::default()
-        .await
-        .ok_or("Bluetooth adapter not found")?;
-    adapter.wait_available().await?;
+    let retry_delay = tokio::time::Duration::from_secs(5);
+    let scan_timeout = tokio::time::Duration::from_secs(30);
 
-    loop {
-        let device = {
-            let connected_heart_rate_devices =
-                adapter.connected_devices_with_services(&[HRS_UUID]).await?;
-            if let Some(device) = connected_heart_rate_devices.into_iter().next() {
-                device
-            } else {
-                println!("Starting scan");
-                let mut scan = adapter.discover_devices(&[HRS_UUID]).await?;
-
-                println!("Scan started");
-                let device = scan.next().await.unwrap()?;
-
-                println!(
-                    "Found Device: [{}] {:?}",
-                    device,
-                    device.name_async().await
-                );
-                device
+    'outer: loop {
+        // 每次循环都重新获取 Adapter，确保睡眠/休眠唤醒后使用有效句柄
+        let adapter = match Adapter::default().await {
+            Some(a) => a,
+            None => {
+                eprintln!("BLE: Bluetooth adapter not found, retrying in {retry_delay:?}...");
+                tokio::time::sleep(retry_delay).await;
+                continue 'outer;
             }
         };
 
-        if let Err(err) = handle_device(&adapter, &device, &app_handle, &heart_rate_tx).await {
-            println!("Connection error: {err:?}");
+        if let Err(e) = adapter.wait_available().await {
+            eprintln!("BLE: wait_available failed: {e:?}, retrying in {retry_delay:?}...");
+            tokio::time::sleep(retry_delay).await;
+            continue 'outer;
+        }
+
+        println!("BLE: Adapter ready");
+
+        // ── 查找设备（先查已连接，再扫描） ──────────────────────
+        let device = loop {
+            // 检查已连接的设备
+            match adapter.connected_devices_with_services(&[HRS_UUID]).await {
+                Ok(devices) => {
+                    if let Some(device) = devices.into_iter().next() {
+                        println!("BLE: Found connected device");
+                        break device;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("BLE: connected_devices_with_services error: {e:?}, refreshing adapter...");
+                    continue 'outer;
+                }
+            }
+
+            // 扫描新设备
+            println!("BLE: Starting scan");
+            let mut scan = match adapter.discover_devices(&[HRS_UUID]).await {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("BLE: discover_devices error: {e:?}, refreshing adapter...");
+                    continue 'outer;
+                }
+            };
+
+            // 带超时等待设备
+            match tokio::time::timeout(scan_timeout, scan.next()).await {
+                Ok(Some(Ok(device))) => {
+                    println!(
+                        "BLE: Found device: [{}] {:?}",
+                        device,
+                        device.name_async().await
+                    );
+                    break device;
+                }
+                Ok(Some(Err(e))) => {
+                    eprintln!("BLE: Scan error: {e:?}, rescanning...");
+                    continue;
+                }
+                Ok(None) => {
+                    eprintln!("BLE: Scan ended with no device, rescanning...");
+                    continue;
+                }
+                Err(_) => {
+                    eprintln!("BLE: Scan timeout ({scan_timeout:?}), rescanning...");
+                    continue;
+                }
+            }
+        };
+
+        // ── 连接并监听 ──────────────────────────────────────────
+        match handle_device(&adapter, &device, &app_handle, &heart_rate_tx).await {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("BLE: Connection error: {e:?}, reconnecting...");
+            }
         }
     }
 }
