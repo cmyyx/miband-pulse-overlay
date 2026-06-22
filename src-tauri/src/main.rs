@@ -46,6 +46,8 @@ struct AppState {
     settings_menu_item: Arc<Mutex<Option<MenuItem<tauri::Wry>>>>,
     obs_menu_item: Arc<Mutex<Option<MenuItem<tauri::Wry>>>>,
     auto_hide_menu_item: Arc<Mutex<Option<CheckMenuItem<tauri::Wry>>>>,
+    /// BLE 重连通知信号
+    ble_restart: Arc<tokio::sync::Notify>,
 }
 
 // ── Windows 窗口边框剥离（使用窗口子类化拦截非客户区激活消息） ─────────────────────────────────
@@ -53,11 +55,26 @@ struct AppState {
 #[cfg(target_os = "windows")]
 mod border_strip {
     use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+    use std::sync::OnceLock;
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::*;
 
     static ORIGINAL_WNDPROC: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
     static SUBCLASS_INSTALLED: AtomicBool = AtomicBool::new(false);
+    /// 电源恢复事件通知器：系统从休眠/睡眠唤醒后触发 BLE 重连
+    static POWER_RESUME_NOTIFY: OnceLock<std::sync::Arc<tokio::sync::Notify>> = OnceLock::new();
+
+    // WM_POWERBROADCAST 及其事件常量（直接使用数值，避免引入额外的 windows feature）
+    const WM_POWERBROADCAST: u32 = 0x0218;
+    /// 系统自动从休眠恢复（如定时唤醒）
+    const PBT_APMRESUMEAUTOMATIC: usize = 0x0012;
+    /// 系统因用户操作从休眠恢复
+    const PBT_APMRESUMESUSPEND: usize = 0x0007;
+
+    /// 注册电源恢复事件通知器，在系统唤醒后触发 BLE 重连
+    pub fn set_power_resume_notify(notify: std::sync::Arc<tokio::sync::Notify>) {
+        let _ = POWER_RESUME_NOTIFY.set(notify);
+    }
 
     unsafe extern "system" fn subclass_proc(
         hwnd: HWND,
@@ -69,6 +86,16 @@ mod border_strip {
             // 拦截非客户区激活和绘制消息，阻止标题栏和按钮显示
             WM_NCACTIVATE | WM_NCPAINT => {
                 LRESULT(1) // 返回 1 表示"已处理"，阻止默认绘制
+            }
+            // 监听电源广播消息：系统从休眠/睡眠恢复时触发 BLE 重连
+            WM_POWERBROADCAST => {
+                if wparam.0 == PBT_APMRESUMEAUTOMATIC || wparam.0 == PBT_APMRESUMESUSPEND {
+                    println!("BLE: Power resume event detected, triggering reconnect");
+                    if let Some(notify) = POWER_RESUME_NOTIFY.get() {
+                        notify.notify_one();
+                    }
+                }
+                LRESULT(1)
             }
             _ => {
                 // 调用原始窗口过程
@@ -259,7 +286,7 @@ async fn hide_window(window: tauri::WebviewWindow, state: State<'_, AppState>) -
 async fn show_window(window: tauri::WebviewWindow, state: State<'_, AppState>) -> Result<(), String> {
     *state.auto_hidden.lock().unwrap() = false;
     window.show().map_err(|e| e.to_string())?;
-    let _ = window.set_focus();
+    // 不获取焦点，避免打断用户当前操作（此函数会被心率更新等自动场景调用）
     Ok(())
 }
 
@@ -587,6 +614,7 @@ fn main() {
             settings_menu_item: Arc::new(Mutex::new(None)),
             obs_menu_item: Arc::new(Mutex::new(None)),
             auto_hide_menu_item: Arc::new(Mutex::new(None)),
+            ble_restart: Arc::new(tokio::sync::Notify::new()),
         })
         .setup(|app| {
             // ── 系统托盘菜单 ──────────────────────────────────────
@@ -608,6 +636,8 @@ fn main() {
                 None::<&str>,
             )?;
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let reconnect_item = MenuItem::with_id(app, "reconnect-ble", "重新连接蓝牙", true, None::<&str>)?;
+            let restart_item = MenuItem::with_id(app, "restart", "重启应用", true, None::<&str>)?;
 
             // 从持久化设置恢复 auto_hide 状态
             let initial_auto_hide = app
@@ -648,7 +678,8 @@ fn main() {
                 app,
                 &[
                     &pin_item, &obs_item, &settings_item, &auto_hide_item, &reset_pos, &open_data,
-                    &show_i, &about_separator, &about_item, &quit_i,
+                    &show_i, &reconnect_item, &restart_item,
+                    &about_separator, &about_item, &quit_i,
                 ],
             )?;
 
@@ -661,10 +692,22 @@ fn main() {
                     "quit" => {
                         app.exit(0);
                     }
+                    "reconnect-ble" => {
+                        let state = app.state::<AppState>();
+                        state.ble_restart.notify_one();
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                        }
+                    }
+                    "restart" => {
+                        if let Ok(exe_path) = std::env::current_exe() {
+                            let _ = std::process::Command::new(exe_path).spawn();
+                        }
+                        app.exit(0);
+                    }
                     "show" => {
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
-                            let _ = window.set_focus();
                         }
                     }
                     "toggle-pin" => {
@@ -675,7 +718,6 @@ fn main() {
                             update_pin_menu(app, *pinned);
                             let _ = app.emit("pin-toggled", ());
                             let _ = window.show();
-                            let _ = window.set_focus();
                         }
                     }
                     "toggle-obs" => {
@@ -704,7 +746,6 @@ fn main() {
                             if let Some(window) = handle.get_webview_window("main") {
                                 update_obs_menu(&handle, !*running);
                                 let _ = window.show();
-                                let _ = window.set_focus();
                             }
                             let _ = handle.emit("obs-state-changed", !*running);
                         });
@@ -717,7 +758,6 @@ fn main() {
                             update_settings_menu(app, *is_open);
 
                             let _ = window.show();
-                            let _ = window.set_focus();
                         }
                         let _ = app.emit("toggle-settings", ());
                     }
@@ -731,7 +771,6 @@ fn main() {
                             *state.auto_hidden.lock().unwrap() = false;
                             if let Some(window) = app.get_webview_window("main") {
                                 let _ = window.show();
-                                let _ = window.set_focus();
                             }
                         }
                     }
@@ -770,7 +809,6 @@ fn main() {
                         let app = tray.app_handle();
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
-                            let _ = window.set_focus();
                         }
                     }
                     _ => {}
@@ -795,6 +833,12 @@ fn main() {
                     unsafe {
                         strip_all_borders(&window);
                     }
+                    // 注册电源恢复事件通知：系统从休眠/睡眠唤醒后触发 BLE 重连
+                    let ble_restart = {
+                        let state = app.state::<AppState>();
+                        state.ble_restart.clone()
+                    };
+                    border_strip::set_power_resume_notify(ble_restart);
                 }
 
                 // 窗口事件监听
@@ -822,10 +866,14 @@ fn main() {
                 let state = handle.state::<AppState>();
                 state.heart_rate_tx.clone()
             };
+            let ble_restart = {
+                let state = handle.state::<AppState>();
+                state.ble_restart.clone()
+            };
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().unwrap();
                 rt.block_on(async move {
-                    if let Err(e) = start_ble_monitor(handle, heart_rate_tx).await {
+                    if let Err(e) = start_ble_monitor(handle, heart_rate_tx, ble_restart).await {
                         eprintln!("BLE monitor error: {e:?}");
                     }
                 });
@@ -858,6 +906,7 @@ fn main() {
 async fn start_ble_monitor(
     app_handle: AppHandle,
     heart_rate_tx: watch::Sender<HeartRate>,
+    ble_restart: Arc<tokio::sync::Notify>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let retry_delay = tokio::time::Duration::from_secs(5);
     let scan_timeout = tokio::time::Duration::from_secs(30);
@@ -868,14 +917,24 @@ async fn start_ble_monitor(
             Some(a) => a,
             None => {
                 eprintln!("BLE: Bluetooth adapter not found, retrying in {retry_delay:?}...");
-                tokio::time::sleep(retry_delay).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(retry_delay) => {},
+                    _ = ble_restart.notified() => {
+                        println!("BLE: Restart requested during retry sleep");
+                    }
+                }
                 continue 'outer;
             }
         };
 
         if let Err(e) = adapter.wait_available().await {
             eprintln!("BLE: wait_available failed: {e:?}, retrying in {retry_delay:?}...");
-            tokio::time::sleep(retry_delay).await;
+            tokio::select! {
+                _ = tokio::time::sleep(retry_delay) => {},
+                _ = ble_restart.notified() => {
+                    println!("BLE: Restart requested during retry sleep");
+                }
+            }
             continue 'outer;
         }
 
@@ -918,22 +977,22 @@ async fn start_ble_monitor(
                     break device;
                 }
                 Ok(Some(Err(e))) => {
-                    eprintln!("BLE: Scan error: {e:?}, rescanning...");
-                    continue;
+                    eprintln!("BLE: Scan error: {e:?}, refreshing adapter...");
+                    continue 'outer;
                 }
                 Ok(None) => {
-                    eprintln!("BLE: Scan ended with no device, rescanning...");
-                    continue;
+                    eprintln!("BLE: Scan ended with no device, refreshing adapter...");
+                    continue 'outer;
                 }
                 Err(_) => {
-                    eprintln!("BLE: Scan timeout ({scan_timeout:?}), rescanning...");
-                    continue;
+                    eprintln!("BLE: Scan timeout ({scan_timeout:?}), refreshing adapter...");
+                    continue 'outer;
                 }
             }
         };
 
         // ── 连接并监听 ──────────────────────────────────────────
-        match handle_device(&adapter, &device, &app_handle, &heart_rate_tx).await {
+        match handle_device(&adapter, &device, &app_handle, &heart_rate_tx, &ble_restart).await {
             Ok(()) => {}
             Err(e) => {
                 eprintln!("BLE: Connection error: {e:?}, reconnecting...");
@@ -947,6 +1006,7 @@ async fn handle_device(
     device: &Device,
     app_handle: &AppHandle,
     heart_rate_tx: &watch::Sender<HeartRate>,
+    ble_restart: &tokio::sync::Notify,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if !device.is_connected().await {
         println!("Connecting device: {}", device.id());
@@ -968,31 +1028,56 @@ async fn handle_device(
         )?;
 
     let mut updates = heart_rate_measurement.notify().await?;
-    while let Some(Ok(heart_rate)) = updates.next().await {
-        let flag = *heart_rate.get(0).ok_or("No flag")?;
+    // 心率数据超时：超过该时长未收到任何数据，视为连接已断开（如系统休眠/唤醒后 BLE 静默断开）
+    let hr_timeout = tokio::time::Duration::from_secs(30);
+    loop {
+        tokio::select! {
+            update = updates.next() => {
+                match update {
+                    Some(Ok(heart_rate)) => {
+                        let flag = *heart_rate.get(0).ok_or("No flag")?;
 
-        let mut heart_rate_value = *heart_rate.get(1).ok_or("No heart rate u8")? as u16;
-        if flag & 0b00001 != 0 {
-            heart_rate_value |=
-                (*heart_rate.get(2).ok_or("No heart rate u16")? as u16) << 8;
+                        let mut heart_rate_value = *heart_rate.get(1).ok_or("No heart rate u8")? as u16;
+                        if flag & 0b00001 != 0 {
+                            heart_rate_value |=
+                                (*heart_rate.get(2).ok_or("No heart rate u16")? as u16) << 8;
+                        }
+
+                        let mut sensor_contact = None;
+                        if flag & 0b00100 != 0 {
+                            sensor_contact = Some(flag & 0b00010 != 0)
+                        }
+
+                        println!(
+                            "HeartRateValue: {heart_rate_value}, SensorContactDetected: {sensor_contact:?}"
+                        );
+
+                        let hr = HeartRate {
+                            value: heart_rate_value,
+                            sensor_contact,
+                        };
+
+                        let _ = heart_rate_tx.send(hr.clone());
+                        let _ = app_handle.emit("heart-rate-update", hr);
+                    }
+                    Some(Err(e)) => {
+                        eprintln!("BLE notify error: {e:?}");
+                        return Err("BLE notify error".into());
+                    }
+                    None => {
+                        return Err("No longer heart rate notify".into());
+                    }
+                }
+            }
+            // 超时保护：长时间无心率数据，视为连接断开（常见于系统休眠/唤醒后）
+            _ = tokio::time::sleep(hr_timeout) => {
+                eprintln!("BLE: No heart rate data for {hr_timeout:?}, assuming disconnected (possibly system sleep)");
+                return Err("Heart rate timeout, possibly due to system sleep".into());
+            }
+            _ = ble_restart.notified() => {
+                println!("BLE: Restart requested, reconnecting...");
+                return Err("Restart requested".into());
+            }
         }
-
-        let mut sensor_contact = None;
-        if flag & 0b00100 != 0 {
-            sensor_contact = Some(flag & 0b00010 != 0)
-        }
-
-        println!(
-            "HeartRateValue: {heart_rate_value}, SensorContactDetected: {sensor_contact:?}"
-        );
-
-        let hr = HeartRate {
-            value: heart_rate_value,
-            sensor_contact,
-        };
-
-        let _ = heart_rate_tx.send(hr.clone());
-        let _ = app_handle.emit("heart-rate-update", hr);
     }
-    Err("No longer heart rate notify".into())
 }
